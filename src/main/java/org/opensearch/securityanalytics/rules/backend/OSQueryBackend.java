@@ -19,6 +19,7 @@ import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentParserUtils;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
+import org.opensearch.search.aggregations.metrics.ValueCountAggregationBuilder;
 import org.opensearch.securityanalytics.resthandler.RestSearchRuleAction;
 import org.opensearch.securityanalytics.rules.aggregation.AggregationItem;
 import org.opensearch.securityanalytics.rules.condition.ConditionAND;
@@ -380,10 +381,22 @@ public class OSQueryBackend extends QueryBackend {
         return new AggregationQueries(fmtAggQuery, fmtBucketTriggerQuery);
     }
 
-    public AggregationBuilder buildAggregation(AggregationItem aggregationItem) {
-        AggregationBuilder termsAggregationBuilder = new TermsAggregationBuilder("result_agg").field(aggregationItem.getGroupByField());
-        AggregationBuilder subAgg = AggregationBuilders.getBuilderByFunction(aggregationItem.getAggFunction(), aggregationItem.getAggField());
-        return termsAggregationBuilder.subAggregation(subAgg);
+    @Override
+    public AggregationBuilder buildAggregation(AggregationItem aggregation) {
+        // If aggregation function is count
+        if (ValueCountAggregationBuilder.NAME.contains(aggregation.getAggFunction())) {
+            String fieldName;
+            if (aggregation.getAggField().equals("*") && aggregation.getGroupByField() == null) {
+                fieldName = "_index";
+            } else {
+                fieldName = aggregation.getGroupByField();
+            }
+            return new TermsAggregationBuilder("result_agg").field(fieldName);
+        } else {
+            AggregationBuilder termsAggregationBuilder = new TermsAggregationBuilder("result_agg").field(aggregation.getGroupByField());
+            AggregationBuilder subAgg = AggregationBuilders.getBuilderByFunction(aggregation.getAggFunction(), aggregation.getAggField());
+            return termsAggregationBuilder.subAggregation(subAgg);
+        }
     }
 
     private boolean comparePrecedence(ConditionType outer, ConditionType inner) {

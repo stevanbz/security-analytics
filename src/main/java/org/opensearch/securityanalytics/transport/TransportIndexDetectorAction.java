@@ -99,8 +99,10 @@ import org.opensearch.securityanalytics.model.DetectorInput;
 import org.opensearch.securityanalytics.model.DetectorRule;
 import org.opensearch.securityanalytics.model.DetectorTrigger;
 import org.opensearch.securityanalytics.model.Rule;
+import org.opensearch.securityanalytics.model.Value;
 import org.opensearch.securityanalytics.rules.aggregation.AggregationItem;
 import org.opensearch.securityanalytics.rules.backend.OSQueryBackend.AggregationQueries;
+import org.opensearch.securityanalytics.rules.backend.QueryBackend;
 import org.opensearch.securityanalytics.rules.condition.ConditionItem;
 import org.opensearch.securityanalytics.rules.exceptions.SigmaError;
 import org.opensearch.securityanalytics.rules.objects.SigmaCondition;
@@ -133,6 +135,8 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
 
     private final ClusterService clusterService;
 
+    private final QueryBackend queryBackend;
+
     private final ThreadPool threadPool;
 
     private final Settings settings;
@@ -140,7 +144,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     private volatile TimeValue indexTimeout;
 
     @Inject
-    public TransportIndexDetectorAction(TransportService transportService, Client client, ActionFilters actionFilters, NamedXContentRegistry xContentRegistry, DetectorIndices detectorIndices, RuleTopicIndices ruleTopicIndices, RuleIndices ruleIndices, MapperService mapperService, ClusterService clusterService, Settings settings) {
+    public TransportIndexDetectorAction(TransportService transportService, Client client, ActionFilters actionFilters, NamedXContentRegistry xContentRegistry, DetectorIndices detectorIndices, RuleTopicIndices ruleTopicIndices, RuleIndices ruleIndices, MapperService mapperService, ClusterService clusterService, QueryBackend queryBackend, Settings settings) {
         super(IndexDetectorAction.NAME, transportService, actionFilters, IndexDetectorRequest::new);
         this.client = client;
         this.xContentRegistry = xContentRegistry;
@@ -149,6 +153,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
         this.ruleIndices = ruleIndices;
         this.mapperService = mapperService;
         this.clusterService = clusterService;
+        this.queryBackend = queryBackend;
         this.settings = settings;
         this.threadPool = this.detectorIndices.getThreadPool();
 
@@ -227,26 +232,19 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
             for (Pair<String, Rule> query: logIndexToQueries.getRight()) {
                 Rule rule = query.getRight();
 
-                // TODO -> Create Bucket level monitor; Per each bucket rule new monitor or?
+                // Creating bucket level monitor per each aggregation rule
+                // TODO - check if bucket level monitors needs to be created per rule
                 if(rule.getAggregationQueries() != null){
                     // Create aggregation queries
                     XContentParser aggregationQueriesParser = XContentFactory.xContent(XContentType.JSON)
                         .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,  rule.getAggregationQueries().get(0).getValue());
-                    AggregationQueries aggregationQueries = AggregationQueries.docParse(aggregationQueriesParser);
 
-                    // Building QueryString
+                    AggregationQueries aggregationQueries = AggregationQueries.docParse(aggregationQueriesParser);
+                    // Building query query_string based on the aggregation
                     QueryBuilder queryBuilder =
                         QueryBuilders.queryStringQuery(rule.getQueries().get(0).getValue());
 
-
-                    NamedXContentRegistry registry = new NamedXContentRegistry(
-                        getDefaultNamedXContents()
-                    );
-                    XContentParser aggregationQueryParser = XContentFactory.xContent(XContentType.JSON)
-                        .createParser(registry, LoggingDeprecationHandler.INSTANCE,   aggregationQueries.getAggQuery());
-                    aggregationQueryParser.nextToken();
-                    // TODO - Probably not the correct way to go; Need to see how to parse aggQueries once the rule is being converted
-                    AggregationBuilder aggregationBuilder = AggregatorFactories.parseAggregators(aggregationQueryParser).getAggregatorFactories().iterator().next();
+                    AggregationBuilder aggregationBuilder = queryBackend.buildAggregation(rule.getAggregationItemsFromRule().get(0));
 
                     SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder()
                         .seqNoAndPrimaryTerm(true)
@@ -276,17 +274,15 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                         triggers.add(bucketLevelTrigger);
                     }
 
-                    DataSources dataSources = new DataSources(detector.getRuleIndex(),
-                        detector.getFindingIndex(),
-                        null,
-                        detector.getAlertIndex(),
-                        null,
-                        null,
-                        DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType()));
-
                     Monitor monitor = new Monitor(Monitor.NO_ID, Monitor.NO_VERSION, detector.getName(), detector.getEnabled(), detector.getSchedule(), detector.getLastUpdateTime(), detector.getEnabledTime(),
                         MonitorType.BUCKET_LEVEL_MONITOR, detector.getUser(), 1, bucketLevelMonitorInputs, triggers, Map.of(),
-                        dataSources);
+                        new DataSources(detector.getRuleIndex(),
+                            detector.getFindingsIndex(),
+                            detector.getFindingsIndexPattern(),
+                            detector.getAlertsIndex(),
+                            detector.getAlertsHistoryIndex(),
+                            detector.getAlertsHistoryIndexPattern(),
+                            DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType())));
 
                     IndexMonitorRequest indexMonitorRequest = new IndexMonitorRequest(Monitor.NO_ID, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, RestRequest.Method.POST, monitor);
                     AlertingPluginInterface.INSTANCE.indexMonitor((NodeClient) client, indexMonitorRequest, listener);

@@ -4,6 +4,7 @@
  */
 package org.opensearch.securityanalytics.rules.backend;
 
+import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.securityanalytics.rules.aggregation.AggregationItem;
 import org.opensearch.securityanalytics.rules.condition.ConditionAND;
 import org.opensearch.securityanalytics.rules.condition.ConditionFieldEqualsValueExpression;
@@ -262,4 +263,6 @@ public abstract class QueryBackend {
 /*   public abstract Object convertConditionValQueryExpr(ConditionValueExpression condition);*/
 
     public abstract Object convertAggregation(AggregationItem aggregation);
+
+    public abstract AggregationBuilder buildAggregation(AggregationItem aggregationItem);
 }

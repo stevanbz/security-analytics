@@ -452,8 +452,9 @@ public class Rule implements Writeable, ToXContentObject {
         return aggregationQueries != null && !aggregationQueries.isEmpty();
     }
 
-    public List<AggregationItem> getAggregationItemsFromRule(Rule rule) throws SigmaError {
-        SigmaRule sigmaRule = SigmaRule.fromYaml(rule.getRule(), true);
+    // TODO - temp method; Replace once you have some more inputs from Shubo and Surya
+    public List<AggregationItem> getAggregationItemsFromRule () throws SigmaError {
+        SigmaRule sigmaRule = SigmaRule.fromYaml(rule, true);
         List<AggregationItem> aggregationItems = new ArrayList<>();
         for (SigmaCondition condition: sigmaRule.getDetection().getParsedCondition()) {
             Pair<ConditionItem, AggregationItem> parsedItems = condition.parsed();
