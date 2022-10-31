@@ -9,6 +9,7 @@ import static java.util.stream.Collectors.toList;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.ServiceLoader;
@@ -30,6 +31,7 @@ import org.opensearch.common.xcontent.XContentParserUtils;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.plugins.SearchPlugin.AggregationSpec;
 import org.opensearch.plugins.spi.NamedXContentProvider;
+import org.opensearch.script.Script;
 import org.opensearch.search.aggregations.Aggregation;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.BaseAggregationBuilder;
@@ -173,6 +175,14 @@ public class AggregationBackendTests extends OpenSearchTestCase {
     }
 
     public void testCountAggregation() throws SigmaError, IOException {
+        String scriptSource = "{\"source\":\"params.%s %s %s\",\"lang\":\"painless\"}";
+        String scriptAsString = String.format(Locale.getDefault(), scriptSource, "_cnt", ">", 110);
+        XContentParser scriptParser = XContentFactory.xContent(XContentType.JSON)
+            .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,  scriptAsString);
+        Script script = Script.parse(scriptParser);
+
+
+
         NamedXContentRegistry registry = new NamedXContentRegistry(
             getDefaultNamedXContents()
         );

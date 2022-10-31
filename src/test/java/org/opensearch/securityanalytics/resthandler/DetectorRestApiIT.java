@@ -4,39 +4,71 @@
  */
 package org.opensearch.securityanalytics.resthandler;
 
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpStatus;
-import org.apache.http.entity.ContentType;
-import org.apache.http.nio.entity.NStringEntity;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.message.BasicHeader;
-import org.junit.Assert;
-import org.opensearch.action.search.SearchResponse;
-import org.opensearch.client.Request;
-import org.opensearch.client.Response;
-import org.opensearch.rest.RestStatus;
-import org.opensearch.search.SearchHit;
-import org.opensearch.securityanalytics.SecurityAnalyticsPlugin;
-import org.opensearch.securityanalytics.SecurityAnalyticsRestTestCase;
-import org.opensearch.securityanalytics.config.monitors.DetectorMonitorConfig;
-import org.opensearch.securityanalytics.model.Detector;
-import org.opensearch.securityanalytics.model.DetectorInput;
-import org.opensearch.securityanalytics.model.DetectorRule;
-
-import java.io.IOException;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-import static org.opensearch.securityanalytics.TestHelpers.avgAggregationTestRule;
+import static org.opensearch.securityanalytics.TestHelpers.productIndexAggRule;
+import static org.opensearch.securityanalytics.TestHelpers.productIndexMapping;
 import static org.opensearch.securityanalytics.TestHelpers.randomDetector;
 import static org.opensearch.securityanalytics.TestHelpers.randomDetectorWithInputs;
 import static org.opensearch.securityanalytics.TestHelpers.randomDoc;
 import static org.opensearch.securityanalytics.TestHelpers.randomIndex;
 import static org.opensearch.securityanalytics.TestHelpers.randomRule;
 import static org.opensearch.securityanalytics.TestHelpers.windowsIndexMapping;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpStatus;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.message.BasicHeader;
+import org.apache.http.nio.entity.NStringEntity;
+import org.junit.Assert;
+import org.opensearch.action.search.SearchResponse;
+import org.opensearch.client.Request;
+import org.opensearch.client.Response;
+import org.opensearch.client.node.NodeClient;
+import org.opensearch.common.bytes.BytesReference;
+import org.opensearch.common.xcontent.LoggingDeprecationHandler;
+import org.opensearch.common.xcontent.NamedXContentRegistry;
+import org.opensearch.common.xcontent.ToXContent;
+import org.opensearch.common.xcontent.XContentBuilder;
+import org.opensearch.common.xcontent.XContentFactory;
+import org.opensearch.common.xcontent.XContentParser;
+import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.commons.alerting.AlertingPluginInterface;
+import org.opensearch.commons.alerting.action.IndexMonitorRequest;
+import org.opensearch.commons.alerting.aggregation.bucketselectorext.BucketSelectorExtAggregationBuilder;
+import org.opensearch.commons.alerting.model.BucketLevelTrigger;
+import org.opensearch.commons.alerting.model.DataSources;
+import org.opensearch.commons.alerting.model.Monitor;
+import org.opensearch.commons.alerting.model.Monitor.MonitorType;
+import org.opensearch.commons.alerting.model.SearchInput;
+import org.opensearch.commons.alerting.model.action.Action;
+import org.opensearch.index.query.QueryBuilder;
+import org.opensearch.index.query.QueryBuilders;
+import org.opensearch.index.seqno.SequenceNumbers;
+import org.opensearch.rest.RestRequest;
+import org.opensearch.rest.RestStatus;
+import org.opensearch.search.SearchHit;
+import org.opensearch.search.aggregations.AggregationBuilder;
+import org.opensearch.search.builder.SearchSourceBuilder;
+import org.opensearch.securityanalytics.SecurityAnalyticsPlugin;
+import org.opensearch.securityanalytics.SecurityAnalyticsRestTestCase;
+import org.opensearch.securityanalytics.config.monitors.DetectorMonitorConfig;
+import org.opensearch.securityanalytics.model.Detector;
+import org.opensearch.securityanalytics.model.DetectorInput;
+import org.opensearch.securityanalytics.model.DetectorRule;
+import org.opensearch.securityanalytics.model.DetectorTrigger;
+import org.opensearch.securityanalytics.model.Rule;
+import org.opensearch.securityanalytics.rules.backend.OSQueryBackend;
+import org.opensearch.securityanalytics.rules.backend.OSQueryBackend.AggregationQueries;
+import org.opensearch.securityanalytics.rules.backend.QueryBackend;
+import org.opensearch.securityanalytics.rules.exceptions.SigmaError;
 
 public class DetectorRestApiIT extends SecurityAnalyticsRestTestCase {
 
@@ -225,8 +257,8 @@ public class DetectorRestApiIT extends SecurityAnalyticsRestTestCase {
         Assert.assertEquals(6, noOfSigmaRuleMatches);
     }
 
-    public void testCreatingADetectorWithAggregationRules() throws IOException {
-        String index = createTestIndex(randomIndex(), windowsIndexMapping());
+    public void testCreatingADetectorWithAggregationRules() throws IOException, SigmaError {
+        String index = createTestIndex(randomIndex(), productIndexMapping());
 
         // Execute CreateMappingsAction to add alias mapping for index
         Request createMappingRequest = new Request("POST", SecurityAnalyticsPlugin.MAPPER_BASE_URI);
@@ -241,7 +273,7 @@ public class DetectorRestApiIT extends SecurityAnalyticsRestTestCase {
         Response response = client().performRequest(createMappingRequest);
         assertEquals(HttpStatus.SC_OK, response.getStatusLine().getStatusCode());
 
-        String rule = avgAggregationTestRule();
+        String rule = productIndexAggRule();
 
         Response createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.RULE_BASE_URI, Collections.singletonMap("category", "windows"),
             new StringEntity(rule), new BasicHeader("Content-Type", "application/json"));
@@ -252,8 +284,12 @@ public class DetectorRestApiIT extends SecurityAnalyticsRestTestCase {
         String createdId = responseBody.get("_id").toString();
 
         DetectorInput input = new DetectorInput("windows detector for security analytics", List.of("windows"), List.of(new DetectorRule(createdId)),
-            getRandomPrePackagedRules().stream().map(DetectorRule::new).collect(Collectors.toList()));
+            Collections.emptyList());
         Detector detector = randomDetectorWithInputs(List.of(input));
+
+
+        XContentBuilder builder = detector.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS);
+        String monitorAsString = BytesReference.bytes(builder).utf8ToString();
 
         createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.DETECTOR_BASE_URI, Collections.emptyMap(), toHttpEntity(detector));
         Assert.assertEquals("Create detector failed", RestStatus.CREATED, restStatus(createResponse));

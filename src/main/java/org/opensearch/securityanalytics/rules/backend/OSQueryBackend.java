@@ -4,6 +4,8 @@
  */
 package org.opensearch.securityanalytics.rules.backend;
 
+import java.util.HashMap;
+import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.OpenSearchParseException;
@@ -11,12 +13,17 @@ import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.io.stream.StreamInput;
 import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.io.stream.Writeable;
+import org.opensearch.common.xcontent.LoggingDeprecationHandler;
+import org.opensearch.common.xcontent.NamedXContentRegistry;
 import org.opensearch.common.xcontent.ToXContent;
 import org.opensearch.common.xcontent.ToXContentObject;
 import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentParser;
 import org.opensearch.common.xcontent.XContentParserUtils;
+import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.commons.alerting.aggregation.bucketselectorext.BucketSelectorExtAggregationBuilder;
+import org.opensearch.script.Script;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.opensearch.search.aggregations.metrics.ValueCountAggregationBuilder;
@@ -376,15 +383,13 @@ public class OSQueryBackend extends QueryBackend {
             fmtAggQuery = String.format(Locale.getDefault(), aggQuery, "result_agg", aggregation.getGroupByField(), aggregation.getAggField(), aggregation.getAggFunction(), aggregation.getAggField());
             fmtBucketTriggerQuery = String.format(Locale.getDefault(), bucketTriggerQuery, aggregation.getAggField(), aggregation.getAggField(), "result_agg", aggregation.getAggField(), aggregation.getCompOperator(), aggregation.getThreshold());
         }
-        AggregationBuilder aggregationBuilder = buildAggregation(aggregation);
-
         return new AggregationQueries(fmtAggQuery, fmtBucketTriggerQuery);
     }
 
     @Override
     public AggregationBuilder buildAggregation(AggregationItem aggregation) {
         // If aggregation function is count
-        if (ValueCountAggregationBuilder.NAME.contains(aggregation.getAggFunction())) {
+        if (aggregation.getAggFunction().equals("count")) {
             String fieldName;
             if (aggregation.getAggField().equals("*") && aggregation.getGroupByField() == null) {
                 fieldName = "_index";
@@ -396,6 +401,27 @@ public class OSQueryBackend extends QueryBackend {
             AggregationBuilder termsAggregationBuilder = new TermsAggregationBuilder("result_agg").field(aggregation.getGroupByField());
             AggregationBuilder subAgg = AggregationBuilders.getBuilderByFunction(aggregation.getAggFunction(), aggregation.getAggField());
             return termsAggregationBuilder.subAggregation(subAgg);
+        }
+    }
+
+    @Override
+    public BucketSelectorExtAggregationBuilder buildTriggerCondition(AggregationItem aggregation) throws IOException {
+        // If aggregation function is count
+        if (ValueCountAggregationBuilder.NAME.contains(aggregation.getAggFunction())) {
+            String scriptSource = "{\"source\":\"params.%s %s %s\",\"lang\":\"painless\"}";
+            String scriptAsString = String.format(Locale.getDefault(), scriptSource, "_cnt", aggregation.getCompOperator(), aggregation.getThreshold());
+            XContentParser scriptParser = XContentFactory.xContent(XContentType.JSON)
+                .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,  scriptAsString);
+            Script script = Script.parse(scriptParser);
+            return new BucketSelectorExtAggregationBuilder("condition", Collections.singletonMap("_cnt", "_cnt"), script, "result_agg", null);
+        } else {
+            String scriptSource = "{\"source\":\"params.%s %s %s\",\"lang\":\"painless\"}";
+            String scriptAsString = String.format(Locale.getDefault(), scriptSource, aggregation.getAggField(), aggregation.getCompOperator(), aggregation.getThreshold());
+            XContentParser scriptParser = XContentFactory.xContent(XContentType.JSON)
+                .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,  scriptAsString);
+            Script script = Script.parse(scriptParser);
+            return new BucketSelectorExtAggregationBuilder("condition", Collections.singletonMap(aggregation.getAggField(), aggregation.getAggField()), script, "result_agg", null);
+
         }
     }
 

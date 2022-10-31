@@ -164,6 +164,34 @@ public class TestHelpers {
                 "    - Legitimate usage of remote file encryption\n" +
                 "level: high";
     }
+    public static String randomAvgRule() {
+        return "title: Remote Encrypting File System Abuse\n" +
+            "id: 5f92fff9-82e2-48eb-8fc1-8b133556a551\n" +
+            "description: Detects remote RPC calls to possibly abuse remote encryption service via MS-EFSR\n" +
+            "references:\n" +
+            "    - https://attack.mitre.org/tactics/TA0008/\n" +
+            "    - https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-36942\n" +
+            "    - https://github.com/jsecurity101/MSRPC-to-ATTACK/blob/main/documents/MS-EFSR.md\n" +
+            "    - https://github.com/zeronetworks/rpcfirewall\n" +
+            "    - https://zeronetworks.com/blog/stopping_lateral_movement_via_the_rpc_firewall/\n" +
+            "tags:\n" +
+            "    - attack.defense_evasion\n" +
+            "status: experimental\n" +
+            "author: Sagie Dulce, Dekel Paz\n" +
+            "date: 2022/01/01\n" +
+            "modified: 2022/01/01\n" +
+            "logsource:\n" +
+            "    product: rpc_firewall\n" +
+            "    category: application\n" +
+            "    definition: 'Requirements: install and apply the RPC Firewall to all processes with \"audit:true action:block uuid:df1941c5-fe89-4e79-bf10-463657acf44d or c681d488-d850-11d0-8c52-00c04fd90f7e'\n" +
+            "detection:\n" +
+            "    selection:\n" +
+            "        EventID: 22\n" +
+            "    condition: selection | count(*) > 1 \n" +
+            "falsepositives:\n" +
+            "    - Legitimate usage of remote file encryption\n" +
+            "level: high";
+    }
     public static String countAggregationTestRule() {
         return "            title: Test\n" +
             "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
@@ -333,6 +361,10 @@ public class TestHelpers {
         return "windows";
     }
 
+    public static String productIndex() {
+        return "test_product";
+    }
+
     public static String randomNetFlowDoc() {
         return "{" +
                 "  \"netflow.event_data.SourceAddress\":\"10.50.221.10\"," +
@@ -392,6 +424,43 @@ public class TestHelpers {
                 "}" +
                 "}" +
                 "    }";
+    }
+
+    public static String productIndexMapping(){
+        return "\"properties\":{\n" +
+            "   \"fieldA\":{\n" +
+            "      \"type\":\"long\"\n" +
+            "   },\n" +
+            "      \"EventTime\": {\n" +
+            "        \"type\": \"date\"\n" +
+            "      },\n" +
+            "   \"fieldB\":{\n" +
+            "      \"type\":\"long\"\n" +
+            "   },\n" +
+            "   \"fieldC\":{\n" +
+            "      \"type\":\"keyword\"\n" +
+            "   }\n" +
+            "}\n" +
+            "}";
+    }
+
+    public static String productIndexAggRule(){
+        return "            title: Test\n" +
+            "            id: 39f919f3-980b-4e6f-a975-8af7e507ef2b\n" +
+            "            status: test\n" +
+            "            level: critical\n" +
+            "            description: Detects QuarksPwDump clearing access history in hive\n" +
+            "            author: Florian Roth\n" +
+            "            date: 2017/05/15\n" +
+            "            logsource:\n" +
+            "                category: test_category\n" +
+            "                product: test_product\n" +
+            "            detection:\n" +
+            "                sel:\n" +
+            "                    fieldA: 123\n" +
+            "                    fieldB: 111\n" +
+            "                    fieldC: valueC\n" +
+            "                condition: sel | avg(fieldA) by fieldC > 110";
     }
 
     public static String windowsIndexMapping() {

@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,12 +40,14 @@ import org.opensearch.action.support.master.AcknowledgedResponse;
 import org.opensearch.client.Client;
 import org.opensearch.client.node.NodeClient;
 import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.common.bytes.BytesReference;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
 import org.opensearch.common.xcontent.NamedXContentRegistry;
 import org.opensearch.common.xcontent.ToXContent;
+import org.opensearch.common.xcontent.XContentBuilder;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentHelper;
 import org.opensearch.common.xcontent.XContentParser;
@@ -101,6 +104,7 @@ import org.opensearch.securityanalytics.model.DetectorTrigger;
 import org.opensearch.securityanalytics.model.Rule;
 import org.opensearch.securityanalytics.model.Value;
 import org.opensearch.securityanalytics.rules.aggregation.AggregationItem;
+import org.opensearch.securityanalytics.rules.backend.OSQueryBackend;
 import org.opensearch.securityanalytics.rules.backend.OSQueryBackend.AggregationQueries;
 import org.opensearch.securityanalytics.rules.backend.QueryBackend;
 import org.opensearch.securityanalytics.rules.condition.ConditionItem;
@@ -135,8 +139,6 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
 
     private final ClusterService clusterService;
 
-    private final QueryBackend queryBackend;
-
     private final ThreadPool threadPool;
 
     private final Settings settings;
@@ -144,7 +146,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
     private volatile TimeValue indexTimeout;
 
     @Inject
-    public TransportIndexDetectorAction(TransportService transportService, Client client, ActionFilters actionFilters, NamedXContentRegistry xContentRegistry, DetectorIndices detectorIndices, RuleTopicIndices ruleTopicIndices, RuleIndices ruleIndices, MapperService mapperService, ClusterService clusterService, QueryBackend queryBackend, Settings settings) {
+    public TransportIndexDetectorAction(TransportService transportService, Client client, ActionFilters actionFilters, NamedXContentRegistry xContentRegistry, DetectorIndices detectorIndices, RuleTopicIndices ruleTopicIndices, RuleIndices ruleIndices, MapperService mapperService, ClusterService clusterService, Settings settings) {
         super(IndexDetectorAction.NAME, transportService, actionFilters, IndexDetectorRequest::new);
         this.client = client;
         this.xContentRegistry = xContentRegistry;
@@ -153,7 +155,6 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
         this.ruleIndices = ruleIndices;
         this.mapperService = mapperService;
         this.clusterService = clusterService;
-        this.queryBackend = queryBackend;
         this.settings = settings;
         this.threadPool = this.detectorIndices.getThreadPool();
 
@@ -224,11 +225,19 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                         DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType())));
 
         IndexMonitorRequest indexMonitorRequest = new IndexMonitorRequest(Monitor.NO_ID, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, RestRequest.Method.POST, monitor);
-        AlertingPluginInterface.INSTANCE.indexMonitor((NodeClient) client, indexMonitorRequest, listener);
+   //     AlertingPluginInterface.INSTANCE.indexMonitor((NodeClient) client, indexMonitorRequest, listener);
     }
 
     private void createBucketMonitorFromQueries(Pair<String, List<Pair<String, Rule>>> logIndexToQueries, Detector detector, ActionListener<IndexMonitorResponse> listener, WriteRequest.RefreshPolicy refreshPolicy) {
         try {
+            // Prepare the queryBackend instances per rule category
+            List<String> ruleCategories = logIndexToQueries.getRight().stream().map(Pair::getRight).map(Rule::getCategory).distinct().collect(
+                Collectors.toList());
+            Map<String, QueryBackend> queryBackendMap = new HashMap<>();
+            for(String category: ruleCategories){
+                queryBackendMap.put(category, new OSQueryBackend(category, true, true));
+            }
+
             for (Pair<String, Rule> query: logIndexToQueries.getRight()) {
                 Rule rule = query.getRight();
 
@@ -244,7 +253,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                     QueryBuilder queryBuilder =
                         QueryBuilders.queryStringQuery(rule.getQueries().get(0).getValue());
 
-                    AggregationBuilder aggregationBuilder = queryBackend.buildAggregation(rule.getAggregationItemsFromRule().get(0));
+                    AggregationBuilder aggregationBuilder = queryBackendMap.get(rule.getCategory()).buildAggregation(rule.getAggregationItemsFromRule().get(0));
 
                     SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder()
                         .seqNoAndPrimaryTerm(true)
@@ -257,10 +266,13 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                     bucketLevelMonitorInputs.add(new SearchInput(Arrays.asList(logIndexToQueries.getKey()), searchSourceBuilder));
 
                     // Bucket level monitor will always have one aggregation and therefore one bucket condition
+                    /*
                     XContentParser bucketConditionParser = XContentFactory.xContent(XContentType.JSON)
                         .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,  aggregationQueries.getBucketTriggerQuery());
                     XContentParserUtils.ensureExpectedToken(Token.START_OBJECT, bucketConditionParser.nextToken(), bucketConditionParser);
                     BucketSelectorExtAggregationBuilder bucketSelectorBuilder = BucketSelectorExtAggregationBuilder.Companion.parse("condition", bucketConditionParser);
+                     */
+                    BucketSelectorExtAggregationBuilder bucketSelectorBuilder = queryBackendMap.get(rule.getCategory()).buildTriggerCondition(rule.getAggregationItemsFromRule().get(0));
 
                     List<DetectorTrigger> detectorTriggers = detector.getTriggers();
                     List<BucketLevelTrigger> triggers = new ArrayList<>();
@@ -275,20 +287,20 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                     }
 
                     Monitor monitor = new Monitor(Monitor.NO_ID, Monitor.NO_VERSION, detector.getName(), detector.getEnabled(), detector.getSchedule(), detector.getLastUpdateTime(), detector.getEnabledTime(),
-                        MonitorType.BUCKET_LEVEL_MONITOR, detector.getUser(), 1, bucketLevelMonitorInputs, triggers, Map.of(),
-                        new DataSources(detector.getRuleIndex(),
-                            detector.getFindingsIndex(),
-                            detector.getFindingsIndexPattern(),
-                            detector.getAlertsIndex(),
-                            detector.getAlertsHistoryIndex(),
-                            detector.getAlertsHistoryIndexPattern(),
-                            DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType())));
+                        MonitorType.BUCKET_LEVEL_MONITOR, detector.getUser(), 1, bucketLevelMonitorInputs, triggers, Map.of(), new DataSources());
+
+                    XContentBuilder builder = monitor.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS);
+                    String monitorAsString = BytesReference.bytes(builder).utf8ToString();
 
                     IndexMonitorRequest indexMonitorRequest = new IndexMonitorRequest(Monitor.NO_ID, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, RestRequest.Method.POST, monitor);
+
                     AlertingPluginInterface.INSTANCE.indexMonitor((NodeClient) client, indexMonitorRequest, listener);
+                    System.out.println(monitorAsString);
                 }
             }
         } catch (Exception ex) {
+            ex.printStackTrace();
+            return;
             // TODO - how to handle
         }
     }

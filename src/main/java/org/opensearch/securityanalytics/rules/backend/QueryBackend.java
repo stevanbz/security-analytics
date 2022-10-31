@@ -4,6 +4,7 @@
  */
 package org.opensearch.securityanalytics.rules.backend;
 
+import org.opensearch.commons.alerting.aggregation.bucketselectorext.BucketSelectorExtAggregationBuilder;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.securityanalytics.rules.aggregation.AggregationItem;
 import org.opensearch.securityanalytics.rules.condition.ConditionAND;
@@ -265,4 +266,6 @@ public abstract class QueryBackend {
     public abstract Object convertAggregation(AggregationItem aggregation);
 
     public abstract AggregationBuilder buildAggregation(AggregationItem aggregationItem);
+
+    public abstract BucketSelectorExtAggregationBuilder buildTriggerCondition(AggregationItem aggregation) throws IOException;
 }
