@@ -9,6 +9,7 @@ import org.opensearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.opensearch.action.support.master.AcknowledgedResponse;
 import org.opensearch.client.IndicesAdminClient;
 import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.metadata.IndexAbstraction;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
 import org.opensearch.common.xcontent.NamedXContentRegistry;
@@ -104,5 +105,19 @@ public class IndexUtils {
                 actionListener.onResponse(new AcknowledgedResponse(true));
             }
         }
+    }
+    public static boolean isDataStream(String name, ClusterState clusterState) {
+        return clusterState.getMetadata().dataStreams().containsKey(name);
+    }
+    public static boolean isAlias(String indexName, ClusterState clusterState) {
+        return clusterState.getMetadata().hasAlias(indexName);
+    }
+    public IndexMetadata getWriteIndex(String indexName, ClusterState clusterState) {
+        if(isAlias(indexName, clusterState) || isDataStream(indexName, clusterState)) {
+            return clusterState.getMetadata()
+                .getIndicesLookup()
+                .get(indexName).getWriteIndex();
+        }
+        return null;
     }
 }
