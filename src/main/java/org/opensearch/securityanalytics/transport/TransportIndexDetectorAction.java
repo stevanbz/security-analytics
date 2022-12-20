@@ -68,6 +68,7 @@ import org.opensearch.commons.alerting.model.Monitor.MonitorType;
 import org.opensearch.commons.alerting.model.SearchInput;
 import org.opensearch.commons.alerting.model.action.Action;
 import org.opensearch.commons.authuser.User;
+import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.index.reindex.BulkByScrollResponse;
@@ -85,6 +86,7 @@ import org.opensearch.securityanalytics.action.IndexDetectorResponse;
 import org.opensearch.securityanalytics.config.monitors.DetectorMonitorConfig;
 import org.opensearch.securityanalytics.mapper.MapperService;
 import org.opensearch.securityanalytics.model.Detector;
+import org.opensearch.securityanalytics.model.Detector.DetectorType;
 import org.opensearch.securityanalytics.model.DetectorInput;
 import org.opensearch.securityanalytics.model.DetectorRule;
 import org.opensearch.securityanalytics.model.DetectorTrigger;
@@ -392,7 +394,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                 detector.getAlertsIndex(),
                 detector.getAlertsHistoryIndex(),
                 detector.getAlertsHistoryIndexPattern(),
-                DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType()),
+                DetectorMonitorConfig.getRuleIndexMappingsByType(),
                 true), PLUGIN_OWNER_FIELD);
 
         return new IndexMonitorRequest(monitorId, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, restMethod, monitor, null);
@@ -474,7 +476,7 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
                 detector.getAlertsIndex(),
                 detector.getAlertsHistoryIndex(),
                 detector.getAlertsHistoryIndexPattern(),
-                DetectorMonitorConfig.getRuleIndexMappingsByType(detector.getDetectorType()),
+                DetectorMonitorConfig.getRuleIndexMappingsByType(),
                 true), PLUGIN_OWNER_FIELD);
 
         return new IndexMonitorRequest(monitorId, SequenceNumbers.UNASSIGNED_SEQ_NO, SequenceNumbers.UNASSIGNED_PRIMARY_TERM, refreshPolicy, restMethod, monitor, null);
@@ -654,7 +656,11 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
 
         void createDetector() {
             Detector detector = request.getDetector();
-            String ruleTopic = detector.getDetectorType();
+
+            List<DetectorType> detectorTypes = List.of(DetectorType.TEST_WINDOWS, DetectorType.WINDOWS);
+                // detector.getInputs().stream().map(DetectorInput::getDetectorType).collect(Collectors.toList());
+            // for the sake of testing
+            String ruleTopic = detectorTypes.isEmpty() ? detector.getDetectorType() : DetectorType.MULTI_LOG_APP.getDetectorType();
 
             request.getDetector().setAlertsIndex(DetectorMonitorConfig.getAlertsIndex(ruleTopic));
             request.getDetector().setAlertsHistoryIndex(DetectorMonitorConfig.getAlertsHistoryIndex(ruleTopic));
@@ -917,21 +923,37 @@ public class TransportIndexDetectorAction extends HandledTransportAction<IndexDe
         public void importRules(IndexDetectorRequest request, ActionListener<List<IndexMonitorResponse>> listener) {
             final Detector detector = request.getDetector();
             final String ruleTopic = detector.getDetectorType();
+            final List<DetectorType> detectorTypes = List.of(DetectorType.TEST_WINDOWS, DetectorType.WINDOWS, DetectorType.LINUX);
+                // detector.getInputs().stream().map(DetectorInput::getDetectorType).collect(Collectors.toList());
             final DetectorInput detectorInput = detector.getInputs().get(0);
             final String logIndex = detectorInput.getIndices().get(0);
 
             List<String> ruleIds = detectorInput.getPrePackagedRules().stream().map(DetectorRule::getId).collect(Collectors.toList());
+            QueryBuilder queryBuilder;
 
-            QueryBuilder queryBuilder =
-                    QueryBuilders.nestedQuery("rule",
-                            QueryBuilders.boolQuery().must(
-                                    QueryBuilders.matchQuery("rule.category", ruleTopic)
-                            ).must(
-                                    QueryBuilders.termsQuery("_id", ruleIds.toArray(new String[]{}))
-                            ),
-                            ScoreMode.Avg
-                    );
-
+            if(!detectorTypes.isEmpty()) {
+                BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+                for(DetectorType detectorType: detectorTypes) {
+                    boolQueryBuilder = boolQueryBuilder.should(QueryBuilders.nestedQuery("rule",
+                        QueryBuilders.boolQuery().must(
+                            QueryBuilders.matchQuery("rule.category", detectorType.getDetectorType())
+                        ).must(
+                            QueryBuilders.termsQuery("_id", ruleIds.toArray(new String[]{}))
+                        ),
+                        ScoreMode.Avg
+                    ));
+                }
+                queryBuilder = boolQueryBuilder;
+            } else {
+                queryBuilder = QueryBuilders.nestedQuery("rule",
+                    QueryBuilders.boolQuery().must(
+                        QueryBuilders.matchQuery("rule.category", ruleTopic)
+                    ).must(
+                        QueryBuilders.termsQuery("_id", ruleIds.toArray(new String[]{}))
+                    ),
+                    ScoreMode.Avg
+                );
+            }
             SearchRequest searchRequest = new SearchRequest(Rule.PRE_PACKAGED_RULES_INDEX)
                     .source(new SearchSourceBuilder()
                             .seqNoAndPrimaryTerm(true)

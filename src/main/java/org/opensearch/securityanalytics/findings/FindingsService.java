@@ -28,6 +28,8 @@ import org.opensearch.securityanalytics.action.GetDetectorResponse;
 import org.opensearch.securityanalytics.action.GetFindingsResponse;
 import org.opensearch.securityanalytics.config.monitors.DetectorMonitorConfig;
 import org.opensearch.securityanalytics.model.Detector;
+import org.opensearch.securityanalytics.model.Detector.DetectorType;
+import org.opensearch.securityanalytics.model.DetectorInput;
 import org.opensearch.securityanalytics.util.SecurityAnalyticsException;
 
 /**
@@ -89,11 +91,16 @@ public class FindingsService {
                 detector.getMonitorIds().forEach(
                         monitorId -> monitorToDetectorMapping.put(monitorId, detector)
                 );
+                List<DetectorType> detectorTypes = detector.getInputs().stream().map(DetectorInput::getDetectorType).collect(
+                    Collectors.toList());
+
+                String detectorType = detectorTypes.isEmpty() ? detector.getDetectorType() : DetectorType.MULTI_LOG_APP.getDetectorType();
+
                 // Get findings for all monitor ids
                 FindingsService.this.getFindingsByMonitorIds(
                         monitorToDetectorMapping,
                         monitorIds,
-                        DetectorMonitorConfig.getAllFindingsIndicesPattern(detector.getDetectorType()),
+                        DetectorMonitorConfig.getAllFindingsIndicesPattern(detectorType),
                         table,
                         getFindingsResponseListener
                 );
@@ -180,6 +187,7 @@ public class FindingsService {
             // all monitorIds
             allMonitorIds.addAll(detector.getMonitorIds());
         });
+
 
          // Execute GetFindingsAction
         FindingsService.this.getFindingsByMonitorIds(

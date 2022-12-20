@@ -227,7 +227,9 @@ public class Detector implements Writeable, ToXContentObject {
         CLOUDTRAIL("cloudtrail"),
         DNS("dns"),
         S3("s3"),
-        TEST_WINDOWS("test_windows");
+        TEST_WINDOWS("test_windows"),
+        MULTI_LOG_APP("multi_log_app");
+
 
         private String type;
 

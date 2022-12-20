@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.opensearch.securityanalytics.model.Detector.DetectorType;
 
 public class DetectorInput implements Writeable, ToXContentObject {
 
@@ -30,6 +31,9 @@ public class DetectorInput implements Writeable, ToXContentObject {
     private List<DetectorRule> customRules;
 
     private List<DetectorRule> prePackagedRules;
+
+    // List of the supported log types - added for the investigation purposes
+    private DetectorType detectorType;
 
     private static final String NO_DESCRIPTION = "";
 
@@ -164,6 +168,10 @@ public class DetectorInput implements Writeable, ToXContentObject {
 
     public List<DetectorRule> getPrePackagedRules() {
         return prePackagedRules;
+    }
+
+    public DetectorType getDetectorType () {
+        return detectorType;
     }
 
     @Override
