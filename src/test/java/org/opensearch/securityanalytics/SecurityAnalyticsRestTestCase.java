@@ -4,6 +4,7 @@
  */
 package org.opensearch.securityanalytics;
 
+import java.io.UnsupportedEncodingException;
 import org.apache.http.HttpHost;
 import java.util.ArrayList;
 import java.util.function.BiConsumer;
@@ -16,6 +17,7 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.message.BasicHeader;
 import org.junit.Assert;
 import org.junit.After;
+import org.junit.Before;
 import org.opensearch.action.admin.indices.mapping.get.GetMappingsResponse;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.client.Request;
@@ -76,7 +78,20 @@ import static org.opensearch.securityanalytics.util.RuleTopicIndices.ruleTopicIn
 import static org.opensearch.securityanalytics.util.RuleTopicIndices.ruleTopicIndexSettings;
 
 public class SecurityAnalyticsRestTestCase extends OpenSearchRestTestCase {
+    // Uncomment to support debug level of logs @Before
+    @Before
+    void setDebugLogLevel() throws IOException {
+        StringEntity se = new StringEntity("{\n" +
+            "                    \"transient\": {\n" +
+            "                        \"logger.org.opensearch.securityanalytics\":\"INFO\",\n" +
+            "                        \"logger.org.opensearch.jobscheduler\":\"INFO\"\n" +
+            "                    }\n" +
+            "                }");
 
+
+
+        Response response = makeRequest(client(), "PUT", "_cluster/settings", Collections.emptyMap(), se, new BasicHeader("Content-Type", "application/json"));
+    }
     protected void createRuleTopicIndex(String detectorType, String additionalMapping) throws IOException {
 
         String mappings = "" +
@@ -256,12 +271,47 @@ public class SecurityAnalyticsRestTestCase extends OpenSearchRestTestCase {
         return hits.stream().map(hit -> hit.get("_id").toString()).collect(Collectors.toList());
     }
 
+    protected List<String> getRandomPrePackagedRules(String ruleCategory) throws IOException {
+        String request = "{\n" +
+            "  \"from\": 0\n," +
+            "  \"size\": 2000\n," +
+            "  \"query\": {\n" +
+            "    \"nested\": {\n" +
+            "      \"path\": \"rule\",\n" +
+            "      \"query\": {\n" +
+            "        \"bool\": {\n" +
+            "          \"must\": [\n" +
+            "            { \"match\": {\"rule.category\": \"" + ruleCategory + "\"}}\n" +
+            "          ]\n" +
+            "        }\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}";
+
+        Response searchResponse = makeRequest(client(), "POST", String.format(Locale.getDefault(), "%s/_search", SecurityAnalyticsPlugin.RULE_BASE_URI), Collections.singletonMap("pre_packaged", "true"),
+            new StringEntity(request), new BasicHeader("Content-Type", "application/json"));
+        Assert.assertEquals("Searching rules failed", RestStatus.OK, restStatus(searchResponse));
+
+        Map<String, Object> responseBody = asMap(searchResponse);
+        List<Map<String, Object>> hits = ((List<Map<String, Object>>) ((Map<String, Object>) responseBody.get("hits")).get("hits"));
+        return hits.stream().map(hit -> hit.get("_id").toString()).collect(Collectors.toList());
+    }
+
     protected List<String> createAggregationRules () throws IOException {
         return new ArrayList<>(Arrays.asList(createRule(productIndexAvgAggRule()), createRule(sumAggregationTestRule())));
     }
 
     protected String createRule(String rule) throws IOException {
         Response createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.RULE_BASE_URI, Collections.singletonMap("category", "windows"),
+            new StringEntity(rule), new BasicHeader("Content-Type", "application/json"));
+        Assert.assertEquals("Create rule failed", RestStatus.CREATED, restStatus(createResponse));
+        Map<String, Object> responseBody = asMap(createResponse);
+        return responseBody.get("_id").toString();
+    }
+
+    protected String createRule(String rule, String ruleCategory) throws IOException {
+        Response createResponse = makeRequest(client(), "POST", SecurityAnalyticsPlugin.RULE_BASE_URI, Collections.singletonMap("category", ruleCategory),
             new StringEntity(rule), new BasicHeader("Content-Type", "application/json"));
         Assert.assertEquals("Create rule failed", RestStatus.CREATED, restStatus(createResponse));
         Map<String, Object> responseBody = asMap(createResponse);

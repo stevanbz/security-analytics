@@ -4,6 +4,7 @@
  */
 package org.opensearch.securityanalytics.transport;
 
+import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.SetOnce;
@@ -137,7 +138,7 @@ public class TransportDeleteDetectorAction extends HandledTransportAction<Delete
 
         private void onGetResponse(Detector detector) {
             List<String> monitorIds = detector.getMonitorIds();
-            String ruleIndex = detector.getRuleIndex();
+            List<String> ruleIndices = detector.getRuleIndices();
             ActionListener<DeleteMonitorResponse> deletesListener = new GroupedActionListener<>(new ActionListener<>() {
                 @Override
                 public void onResponse(Collection<DeleteMonitorResponse> responses) {
@@ -152,46 +153,16 @@ public class TransportDeleteDetectorAction extends HandledTransportAction<Delete
                     }).count() > 0) {
                         onFailures(new OpenSearchStatusException("Monitor associated with detected could not be deleted", errorStatusSupplier.get()));
                     }
-                    ruleTopicIndices.countQueries(ruleIndex, new ActionListener<>() {
+
+                    checkAndDeleteRuleIndices(ruleIndices, new ActionListener<>() {
                         @Override
-                        public void onResponse(SearchResponse response) {
-                            if (response.isTimedOut()) {
-                                log.info("Count response timed out");
-                                deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
-                            } else {
-                                long count = response.getHits().getTotalHits().value;
-
-                                if (count == 0) {
-                                    try {
-                                        ruleTopicIndices.deleteRuleTopicIndex(ruleIndex,
-                                                new ActionListener<>() {
-                                                    @Override
-                                                    public void onResponse(AcknowledgedResponse response) {
-                                                        deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
-                                                    }
-
-                                                    @Override
-                                                    public void onFailure(Exception e) {
-                                                        // error is suppressed as it is not a critical deletion
-                                                        log.info(e.getMessage());
-                                                        deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
-                                                    }
-                                                });
-                                    } catch (IOException e) {
-                                        deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
-                                    }
-                                } else {
-                                    deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
-                                }
-                            }
+                        public void onResponse(AcknowledgedResponse acknowledgedResponse) {
+                            deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
                         }
 
                         @Override
                         public void onFailure(Exception e) {
-                            // error is suppressed as it is not a critical deletion
-                            log.info(e.getMessage());
-
-
+                            deleteDetectorFromConfig(detector.getId(), request.getRefreshPolicy());
                         }
                     });
                 }
@@ -206,6 +177,69 @@ public class TransportDeleteDetectorAction extends HandledTransportAction<Delete
             for (String monitorId : monitorIds) {
                 deleteAlertingMonitor(monitorId, request.getRefreshPolicy(),
                         deletesListener);
+            }
+        }
+
+        private void checkAndDeleteRuleIndices(List<String> ruleIndices, ActionListener<AcknowledgedResponse> listener) {
+            List<String> existingRuleIndices = ruleIndices.stream().filter(ruleTopicIndices::ruleTopicIndexExists).collect(
+                Collectors.toList());
+            // If there are no indices, return immediately
+            if(existingRuleIndices.isEmpty()) {
+                listener.onResponse(new AcknowledgedResponse(true));
+                return;
+            }
+
+            ActionListener<AcknowledgedResponse> onDeleteQueryIndexListener = new GroupedActionListener<>(
+                new ActionListener<>() {
+                    @Override
+                    public void onResponse(Collection<AcknowledgedResponse> searchResponses) {
+                        listener.onResponse(new AcknowledgedResponse(true));
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        listener.onResponse(new AcknowledgedResponse(true));
+                    }
+                }, existingRuleIndices.size());
+
+            for (String ruleIndex: existingRuleIndices) {
+                ruleTopicIndices.countQueries(ruleIndex, new ActionListener<>() {
+                    @Override
+                    public void onResponse(SearchResponse searchResponse) {
+                        if (searchResponse.isTimedOut()) {
+                            log.info("Count response timed out");
+                            onDeleteQueryIndexListener.onResponse(new AcknowledgedResponse(true));
+                        } else {
+                            long count = searchResponse.getHits().getTotalHits().value;
+                            if (count == 0) {
+                                try {
+                                    ruleTopicIndices.deleteRuleTopicIndex(ruleIndex,
+                                        new ActionListener<>() {
+                                            @Override
+                                            public void onResponse(AcknowledgedResponse response) {
+                                                onDeleteQueryIndexListener.onResponse(new AcknowledgedResponse(true));
+                                            }
+                                            @Override
+                                            public void onFailure(Exception e) {
+                                                log.info(e.getMessage());
+                                                onDeleteQueryIndexListener.onResponse(new AcknowledgedResponse(true));
+                                            }
+                                        });
+                                } catch (IOException e) {
+                                    onDeleteQueryIndexListener.onResponse(new AcknowledgedResponse(true));
+                                }
+                            } else {
+                                onDeleteQueryIndexListener.onResponse(new AcknowledgedResponse(true));
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception e) {
+                        // error is suppressed as it is not a critical deletion
+                        log.info(e.getMessage());
+                    }
+                });
             }
         }
 
